@@ -11,58 +11,235 @@ import random
 import sys
 from queue import Queue
 from threading import Thread
+import glob
+import xml.etree.ElementTree
+import os
+import hashlib
 import time
+from sklearn.metrics import confusion_matrix
+import pu.sklearn_utils as su
+
+# functions that start with _ imply that these are private functions
+
+def nprint(mystring) :
+    print("{} : {}".format(sys._getframe(1).f_code.co_name,mystring))
 
 
-# Function to automatically fetch data from API in threaded mode...
-def fetch_scores(video_fn, json_fn, paiv_url, mode="video", num_threads=2, frame_limit=50):
-    frame_limit = int(frame_limit)
+def _convert_xml(filein) :
+    e = xml.etree.ElementTree.parse(filein).getroot()
+    #class_list = []
+    #box_list = []
+    rv_list = []
+    for obj in e.findall('object') :
+        objclass = obj.find('name').text
+        objclass = objclass.replace(' ','_')
+        xmin = int(obj.find('bndbox').find('xmin').text)
+        ymin = int(obj.find('bndbox').find('ymin').text)
+        xmax = int(obj.find('bndbox').find('xmax').text)
+        ymax = int(obj.find('bndbox').find('ymax').text)
+
+        if(xmin < 0.0 or ymin < 0.0 or xmax < 0 or ymax <0 ) :
+            nprint("Error, file {} somehow has a negative pixel location recorded.  Omitting that box ....".format(filein))
+        else :
+            box_dict = {"label" : objclass, "xmin" : xmin, "ymin" : ymin, "xmax" : xmax, "xmin" : xmin}
+            #class_list.append(objclass)
+            #box_list.append([xmin,ymin,xmax,ymax])
+            rv_list.append(box_dict)
+    # zip the class and box dimensions !
+    #rv = list(zip(class_list,box_list))
+    #image_name =  get_image_from_xml(filein)
+    #pdb.set_trace()
+    #write_coco_labels(experiment_dir,image_name,0.0,box_list,class_list,cn_dict,labels_file)
+    return rv_list
+
+def get_image_fn(paiv_file_name_base) :
+    image_file = paiv_file_name_base + ".JPG"
+    if(not(os.path.isfile(image_file))):
+        image_file = paiv_file_name_base + ".png"
+    return image_file
+
+# Hash function to uniquely identify an image by just pixel values
+def get_np_hash(npary) :
+    return hashlib.md5(npary.data).hexdigest()
+
+#  Function to Read in an AI Vision data directory and return a python object (dict)
+#  to be used for all kinds of experiments.
+def _load_paiv_dataset(data_dir) :
+    paiv_dataset = {}
+    if(os.path.exists(data_dir)) :
+        os.chdir(data_dir)
+        xml_file_list = glob.glob("*.xml")
+        for xf in xml_file_list :
+            (xf_file_base,junk) = xf.split(".")
+            image_fn = get_image_fn(xf_file_base)
+            np_hash = get_np_hash(cv2.imread(image_fn))
+            paiv_dataset[np_hash] = _convert_xml(xf)
+
+
+
+    else :
+        nprint("Data Directory {} does not exist".format(data_dir))
+
+    return paiv_dataset
+
+
+def validate_model(paiv_results_file,  image_dir) :
+    #test exists
+
+    ground_truth = _load_paiv_dataset(image_dir)
+
+    model_predictions_json = open(paiv_results_file).read()
+    model_predictions = json.loads(model_predictions_json)
+
+    #  Truth table
+    # use sklearn metrics confusion_matrix.  need to build a long list of y_true, y_pred
+    tt_label = {}
+    ytrue_cum = []
+    ypred_cum = []
+    for mykey in model_predictions.keys() :
+        # Each prediction could have a list of boxes ..
+        print("model prediction : {}".format(model_predictions[mykey]))
+        print("ground_truth     : {}".format(ground_truth[mykey]))
+        (ytrue, ypred) = return_ytrue_ypre(ground_truth[mykey], model_predictions[mykey]['classified'])
+        ytrue_cum = ytrue_cum + ytrue
+        ypred_cum = ypred_cum + ypred
+    # Function to automatically fetch data from API in threaded mode...
+    # modes = video / image_dir
+    classes = list(set(ytrue_cum+ypred_cum))
+    cm = confusion_matrix(ytrue_cum, ypred_cum, labels=classes)
+    su.plot_confusion_matrix(cm, classes, title='confusion matrix',normalize=False)
+    print(cm)
+    for i in range(len(classes)) :
+
+        if(np.sum(cm[:,i]) != 0) :
+            precision = float(cm[i,i]) / float(np.sum(cm[:,i]))
+        else :
+            precision = "na"
+
+        if(np.sum(cm[i,:]) != 0) :
+            recall    = float(cm[i,i]) / float(np.sum(cm[i,:]))
+        else :
+            recall = "na"
+
+        #nprint("class  = {} TP = {}  TP+FP ={}  TP+FN = {} ".format(classes[i], cm[i,i],np.sum(cm[:,i]),np.sum(cm[i,:])))
+        nprint("class  = {} Precision = {}  Recall = {}".format(classes[i],precision,recall))
+
+def return_ytrue_ypre(ground_truth, model_predictions) :
+    # 1. build a sorted list of labels
+    a = ground_truth
+    ytrue_labels = [a["label"] for a in ground_truth]
+    ypred_labels = [a["label"] for a in model_predictions]
+
+    ytrue_labels = sorted(ytrue_labels)
+    ypred_labels = sorted(ypred_labels)
+    # 2. smart zipper labels
+
+    ip = 0
+    it = 0
+    ytrue = []
+    ypred = []
+    # yaesh
+    while( not( it >= len(ytrue_labels) and ip >= len(ypred_labels))) :
+
+        ytl =  "zzzzzzzzz_null" if it >= len(ytrue_labels) else  ytrue_labels[it]
+        ypl =  "zzzzzzzzz_null" if ip >= len(ypred_labels) else  ypred_labels[ip]
+
+        if(ytl == ypl) :
+            ytrue.append(ytl)
+            ypred.append(ypl)
+            it += 1
+            ip += 1
+        elif(ytl != ypl and ytl <= ypl) :
+            ytrue.append(ytl)
+            ypred.append("null")
+            it += 1
+        elif(ytl != ypl and ypl < ytl) :
+            ytrue.append("null")
+            ypred.append(ypl)
+            ip += 1
+
+    print("ytrue = {}".format(ytrue))
+    print("ypred = {}".format(ypred))
+    return (ytrue, ypred)
+
+
+
+
+def fetch_scores(paiv_url, mode="video", num_threads=2, frame_limit=50, image_dir="na", video_fn="na", paiv_results_file="fetch_scores.json"):
 
     # This consumer function yanks Frames off the queue and stores result in json list ...
-    def consume_frames(q,result_list,thread_id):
+    def consume_frames(q,result_dict,thread_id):
         fetch_fn = "paiv_{}.jpg".format(thread_id)
         while (q.qsize() > 0):
             print("Thr {} : Size of queue = {}".format(thread_id, q.qsize()))
-            (frame_id, frame_np) = q.get()
-            print("Thr {} : Frame id = {}".format(thread_id, frame_id))
+            (frame_key, frame_np) = q.get()
+            print("Thr {} : Frame id = {}".format(thread_id, frame_key))
 
             json_rv = get_json_from_paiv(paiv_url, frame_np, fetch_fn )
-            result_list[frame_id] = json_rv
+            result_dict[frame_key] = json_rv
             q.task_done()
 
-
-    cap  = cv2.VideoCapture(video_fn)
-    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    fps = cap.get(cv2.CAP_PROP_FPS) # fps = video.get(cv2.CAP_PROP_FPS)
-    secs = total_frames / fps
-    print("Total number of frames  = {} (frames)".format(total_frames))
-    print("Frame rate              = {} (fps)".format(fps))
-    print("Total seconds for video = {} (s)".format(secs))
-
-
-    if(frame_limit > total_frames) :
-        frame_limit = total_frames
-    framecnt = 0 # equals one b/c I read a frame ...
-    result_json_list = [None] * int(frame_limit)
-
     q = Queue(maxsize=0)
+    result_json_hash = {}
+    cap = None
 
-    # load num_threads images into queue with framecnt as index
+    if(mode == "video") :
+        frame_limit = int(frame_limit)
+        cap  = cv2.VideoCapture(video_fn)
+        total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        fps = cap.get(cv2.CAP_PROP_FPS) # fps = video.get(cv2.CAP_PROP_FPS)
+        secs = total_frames / fps
+        print("Total number of frames  = {} (frames)".format(total_frames))
+        print("Frame rate              = {} (fps)".format(fps))
+        print("Total seconds for video = {} (s)".format(secs))
 
 
-    # Load Frames into Queue here.. then release the hounds
-    # This is a serialized producer ....
-    while(framecnt < frame_limit):
-        # Load
-        for i in range(frame_limit) :
-            ret, frame = cap.read()
-            q.put((framecnt,frame))
-            framecnt += 1
+        if(frame_limit > total_frames) :
+            frame_limit = total_frames
+        framecnt = 0 # equals one b/c I read a frame ...
+        result_json_hash = [None] * int(frame_limit)
+
+
+        # load num_threads images into queue with framecnt as index
+        # Load Frames into Queue here.. then release the hounds
+        # This is a serialized producer ....
+        while(framecnt < frame_limit):
+            # Load
+            for i in range(frame_limit) :
+                ret, frame = cap.read()
+                q.put((framecnt,frame))
+                framecnt += 1
+
+    elif(mode == "image") :
+        # load in numpy array into Q !!
+        if(image_dir == "na") :
+            nprint("ERROR : need to specify image_dir=<image directory> in function call")
+            return "error"
+
+        paiv_data = _load_paiv_dataset(image_dir)
+        #result_json_hash = [None] * len(paiv_data)
+
+        #load the images here!
+        idx = 0
+        for image_key in paiv_data.keys() :
+            image_file = get_image_fn(image_key)
+
+            npary = cv2.imread(image_file)
+            if(npary.any() == None) :
+                nprint("Error loading {}.  Unsupported file extension\nexiting ....".format(image_file))
+                return 1;
+
+            mykey =get_np_hash(npary)
+
+            q.put((mykey,npary))
+            print(idx)
+            idx += 1
+
 
     # Setup Consumers.  They will fetch frame json info from api, and stick it in results list
     threads = [None] * num_threads
     for i in range(len(threads)):
-        threads[i] = Thread(target=consume_frames, args=(q, result_json_list, i))
+        threads[i] = Thread(target=consume_frames, args=(q, result_json_hash, i))
         threads[i].start()
 
     # Block until all consumers are finished ....
@@ -71,11 +248,12 @@ def fetch_scores(video_fn, json_fn, paiv_url, mode="video", num_threads=2, frame
         threads[i].join()
     #nprint("Total number of frames processed : {} ".format(fram))
 
-    cap.release()
+    if(mode == "video") :
+        cap.release()
 
-    nprint("Writing json data to {}".format(json_fn))
-    f = open(json_fn, 'w')
-    f.write(json.dumps(result_json_list))
+    nprint("Writing json data to {}".format(paiv_results_file))
+    f = open(paiv_results_file, 'w')
+    f.write(json.dumps(result_json_hash))
     f.close()
 
 
@@ -120,6 +298,7 @@ def get_json_from_paiv(endpoint, img, temporary_fn ):
     else :
         json_rv = {'empty_url' : ''}
 
+    nprint("Returning data : {}".format(json_rv))
 
     return json_rv
 
