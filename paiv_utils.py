@@ -17,7 +17,7 @@ import os
 import hashlib
 import time
 from sklearn.metrics import confusion_matrix
-import pu.sklearn_utils as su
+import sklearn_utils as su
 
 # functions that start with _ imply that these are private functions
 
@@ -50,12 +50,18 @@ def _convert_xml(filein) :
     #image_name =  get_image_from_xml(filein)
     #pdb.set_trace()
     #write_coco_labels(experiment_dir,image_name,0.0,box_list,class_list,cn_dict,labels_file)
+
     return rv_list
 
 def get_image_fn(paiv_file_name_base) :
     image_file = paiv_file_name_base + ".JPG"
     if(not(os.path.isfile(image_file))):
+        image_file = paiv_file_name_base + ".jpg"
+    if(not(os.path.isfile(image_file))):
         image_file = paiv_file_name_base + ".png"
+    if(not(os.path.isfile(image_file))):
+        image_file = None
+
     return image_file
 
 # Hash function to uniquely identify an image by just pixel values
@@ -64,17 +70,36 @@ def get_np_hash(npary) :
 
 #  Function to Read in an AI Vision data directory and return a python object (dict)
 #  to be used for all kinds of experiments.
-def _load_paiv_dataset(data_dir) :
+#  supports both object, classification modes (validate_mode setting)
+#  returns a dictionary of dictionaries
+#    top level dictionary keys are hash of np array
+#      second level dictionary is the metadata associated with the image
+def _load_paiv_dataset(data_dir, validate_mode) :
     paiv_dataset = {}
     if(os.path.exists(data_dir)) :
         os.chdir(data_dir)
-        xml_file_list = glob.glob("*.xml")
-        for xf in xml_file_list :
-            (xf_file_base,junk) = xf.split(".")
-            image_fn = get_image_fn(xf_file_base)
-            np_hash = get_np_hash(cv2.imread(image_fn))
-            paiv_dataset[np_hash] = _convert_xml(xf)
 
+        if(validate_mode == "object") :
+            xml_file_list = glob.glob("*.xml")
+            for xf in xml_file_list :
+                (xf_file_base,junk) = xf.split(".")
+                image_fn = get_image_fn(xf_file_base)
+                np_hash = get_np_hash(cv2.imread(image_fn))
+                paiv_dataset[np_hash] = {'id' : xf_file_base , 'boxes' : _convert_xml(xf)}
+        else : # classification
+            # read in prop.json file and stuff into hash !
+            json_str = open(data_dir + "/prop.json").read()
+            json_parsed = json.loads(json_str)
+            file_class_list = json.loads(json_parsed['file_prop_info'])
+
+            for i in file_class_list :
+                xf_file_base = i['_id']
+                # print(xf_file_base)
+
+                image_fn = get_image_fn(xf_file_base)
+                if(image_fn != None) :
+                    np_hash = get_np_hash(cv2.imread(image_fn))
+                    paiv_dataset[np_hash] = {'id' : xf_file_base, 'class' : i['category_name']}  # save the class for the image!
 
 
     else :
@@ -83,10 +108,21 @@ def _load_paiv_dataset(data_dir) :
     return paiv_dataset
 
 
-def validate_model(paiv_results_file,  image_dir) :
-    #test exists
+def validate_model(paiv_results_file,  image_dir,  validate_mode) :
+    '''
+    Validate model : 
+        prerequisites : 
+        1.  first need to run paiv.fetch_scores to build a paiv_results_file.  This file contains
+        all the scored results from hitting a PAIV model with images/video from a directory
+        2.  need to specify the image directory where the source images exist
+        
+        3.  validate_mode is based on either doing object detection or classification validation ['object'|'classification']
 
-    ground_truth = _load_paiv_dataset(image_dir)
+
+    '''
+    #test exists
+    nprint("Loading Dataset to get ground truth labels")
+    ground_truth = _load_paiv_dataset(image_dir, validate_mode)
 
     model_predictions_json = open(paiv_results_file).read()
     model_predictions = json.loads(model_predictions_json)
@@ -100,7 +136,12 @@ def validate_model(paiv_results_file,  image_dir) :
         # Each prediction could have a list of boxes ..
         print("model prediction : {}".format(model_predictions[mykey]))
         print("ground_truth     : {}".format(ground_truth[mykey]))
-        (ytrue, ypred) = return_ytrue_ypre(ground_truth[mykey], model_predictions[mykey]['classified'])
+        if(validate_mode == 'object') :
+            (ytrue, ypred) = return_ytrue_ypre_objdet(ground_truth[mykey]['boxes'], model_predictions[mykey]['classified'])
+        elif(validate_mode == 'classification') :
+            (ytrue, ypred) = return_ytrue_ypre_classification(ground_truth[mykey], model_predictions[mykey]['classified'])
+        else :
+            nprint("Error : invalid validate_mode passed")
         ytrue_cum = ytrue_cum + ytrue
         ypred_cum = ypred_cum + ypred
     # Function to automatically fetch data from API in threaded mode...
@@ -109,22 +150,43 @@ def validate_model(paiv_results_file,  image_dir) :
     cm = confusion_matrix(ytrue_cum, ypred_cum, labels=classes)
     su.plot_confusion_matrix(cm, classes, title='confusion matrix',normalize=False)
     print(cm)
+    diag_sum = 0
+    total_sum = np.sum(cm)
     for i in range(len(classes)) :
-
-        if(np.sum(cm[:,i]) != 0) :
-            precision = float(cm[i,i]) / float(np.sum(cm[:,i]))
+        tp = float(cm[i,i])
+        diag_sum += tp
+        tpfp = float(np.sum(cm[:,i]))
+        tpfn = float(np.sum(cm[i,:]))
+        fn = tpfn - tp
+        fp = tpfp - tp
+        if(tpfp != 0) :
+            precision = tp / tpfp
         else :
-            precision = "na"
+            precision = 0.0
 
-        if(np.sum(cm[i,:]) != 0) :
-            recall    = float(cm[i,i]) / float(np.sum(cm[i,:]))
+        if(tpfn != 0) :
+            recall    = tp / tpfn
         else :
-            recall = "na"
+            recall = 0.0
 
         #nprint("class  = {} TP = {}  TP+FP ={}  TP+FN = {} ".format(classes[i], cm[i,i],np.sum(cm[:,i]),np.sum(cm[i,:])))
-        nprint("class  = {} Precision = {}  Recall = {}".format(classes[i],precision,recall))
+        nprint("class = {} : tp = {} : fp = {} : fn = {} : Precision = {:0.2f}  Recall = {:0.2f}".format(classes[i],tp,fp, fn,precision,recall))
+    nprint("Overall Accuracy = {:0.2f}".format(diag_sum/total_sum))
 
-def return_ytrue_ypre(ground_truth, model_predictions) :
+def return_ytrue_ypre_classification(ground_truth, model_predictions) :
+    # Examples of whats passed
+    #model prediction : {'classified': {'No Nest': '0.95683'}, 'result': 'success', 'imageMd5': '0acfd6f5b3368d380a67ca9c8d309acd', 'imageUrl': 'http://powerai-vision-portal:9080/powerai-vision-api/uploads/temp/8f80467f-470c-47f3-bf3c-ab7e0880a66b/18c20462-c693-4735-875a-64a30d9974d4.jpg', 'webAPIId': '8f80467f-470c-47f3-bf3c-ab7e0880a66b'}
+    #ground_truth     : {'class': 'No Nest', 'id': 'ffbc9c99-201a-4b1a-bce1-a1a1c3ecdc92'}
+
+    # To be compatible with object detection, need to return a list of one item ...
+    ytrue = []
+    ytrue.append((ground_truth['class']))
+    ypred = []
+    ypred.append(list(model_predictions.keys())[0])
+    return (ytrue, ypred)
+
+
+def return_ytrue_ypre_objdet(ground_truth, model_predictions) :
     # 1. build a sorted list of labels
     a = ground_truth
     ytrue_labels = [a["label"] for a in ground_truth]
@@ -165,7 +227,7 @@ def return_ytrue_ypre(ground_truth, model_predictions) :
 
 
 
-def fetch_scores(paiv_url, mode="video", num_threads=2, frame_limit=50, image_dir="na", video_fn="na", paiv_results_file="fetch_scores.json"):
+def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", num_threads=2, frame_limit=50, image_dir="na", video_fn="na", paiv_results_file="fetch_scores.json"):
 
     # This consumer function yanks Frames off the queue and stores result in json list ...
     def consume_frames(q,result_dict,thread_id):
@@ -183,7 +245,7 @@ def fetch_scores(paiv_url, mode="video", num_threads=2, frame_limit=50, image_di
     result_json_hash = {}
     cap = None
 
-    if(mode == "video") :
+    if(media_mode == "video") :
         frame_limit = int(frame_limit)
         cap  = cv2.VideoCapture(video_fn)
         total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
@@ -210,19 +272,20 @@ def fetch_scores(paiv_url, mode="video", num_threads=2, frame_limit=50, image_di
                 q.put((framecnt,frame))
                 framecnt += 1
 
-    elif(mode == "image") :
+    elif(media_mode == "image") :
         # load in numpy array into Q !!
         if(image_dir == "na") :
             nprint("ERROR : need to specify image_dir=<image directory> in function call")
             return "error"
-
-        paiv_data = _load_paiv_dataset(image_dir)
+        nprint("Loading Dataset to prepare for inferencing ")
+        paiv_data = _load_paiv_dataset(image_dir, validate_mode)
         #result_json_hash = [None] * len(paiv_data)
 
         #load the images here!
         idx = 0
-        for image_key in paiv_data.keys() :
-            image_file = get_image_fn(image_key)
+        for image_hash_key in paiv_data.keys() :
+            image_id = paiv_data[image_hash_key]['id']
+            image_file = get_image_fn(image_id)
 
             npary = cv2.imread(image_file)
             if(npary.any() == None) :
@@ -232,7 +295,7 @@ def fetch_scores(paiv_url, mode="video", num_threads=2, frame_limit=50, image_di
             mykey =get_np_hash(npary)
 
             q.put((mykey,npary))
-            print(idx)
+            #print(idx)
             idx += 1
 
 
@@ -248,7 +311,7 @@ def fetch_scores(paiv_url, mode="video", num_threads=2, frame_limit=50, image_di
         threads[i].join()
     #nprint("Total number of frames processed : {} ".format(fram))
 
-    if(mode == "video") :
+    if(media_mode == "video") :
         cap.release()
 
     nprint("Writing json data to {}".format(paiv_results_file))
