@@ -42,4 +42,5 @@ for i in range(len(files)) :
         # copy flie to train bucket
         shutil.copy(files[i], OUTDIR_TRAIN + "/")
 
-shutil.copy(INDIR + ", OUTDIR_TRAIN + "/")
+shutil.copy(INDIR + "/prop.json", OUTDIR_TRAIN + "/" )
+shutil.copy(INDIR + "/prop.json", OUTDIR_TEST + "/")

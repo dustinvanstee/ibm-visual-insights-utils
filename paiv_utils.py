@@ -4,7 +4,7 @@
 import cv2
 import json
 import requests
-from PIL import ImageFont, ImageDraw, Image
+import urllib3
 import numpy as np
 import colorsys
 import random
@@ -18,7 +18,7 @@ import hashlib
 import time
 from sklearn.metrics import confusion_matrix
 import sklearn_utils as su
-
+from collections import defaultdict
 # functions that start with _ imply that these are private functions
 
 def nprint(mystring) :
@@ -227,15 +227,18 @@ def return_ytrue_ypre_objdet(ground_truth, model_predictions) :
 
 
 
-def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", num_threads=2, frame_limit=50, image_dir="na", video_fn="na", paiv_results_file="fetch_scores.json"):
-
+def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", num_threads=2, frame_limit=50, sample_rate=10, image_dir="na", video_fn="na", paiv_results_file="fetch_scores.json"):
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     # This consumer function yanks Frames off the queue and stores result in json list ...
     def consume_frames(q,result_dict,thread_id):
         fetch_fn = "paiv_{}.jpg".format(thread_id)
         while (q.qsize() > 0):
-            print("Thr {} : Size of queue = {}".format(thread_id, q.qsize()))
-            (frame_key, frame_np) = q.get()
-            print("Thr {} : Frame id = {}".format(thread_id, frame_key))
+
+            (frame_key, frame_id, frame_np) = q.get()
+            if(q.qsize() % 10 == 0) :
+                print("Thr {} : Size of queue = {}".format(thread_id, q.qsize()))
+                #print("Thr {} : Hash key = {}".format(thread_id, frame_key))
+                #print("Thr {} : Frame id = {}".format(thread_id, frame_id))
 
             json_rv = get_json_from_paiv(paiv_url, frame_np, fetch_fn )
             result_dict[frame_key] = json_rv
@@ -246,30 +249,39 @@ def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", n
     cap = None
 
     if(media_mode == "video") :
+
         frame_limit = int(frame_limit)
         cap  = cv2.VideoCapture(video_fn)
         total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
         fps = cap.get(cv2.CAP_PROP_FPS) # fps = video.get(cv2.CAP_PROP_FPS)
         secs = total_frames / fps
-        print("Total number of frames  = {} (frames)".format(total_frames))
-        print("Frame rate              = {} (fps)".format(fps))
-        print("Total seconds for video = {} (s)".format(secs))
-
+        nprint("Total number of frames  = {} (frames)".format(total_frames))
+        nprint("Frame rate              = {} (fps)".format(fps))
+        nprint("Total seconds for video = {} (s)".format(secs))
 
         if(frame_limit > total_frames) :
-            frame_limit = total_frames
-        framecnt = 0 # equals one b/c I read a frame ...
-        result_json_hash = [None] * int(frame_limit)
+            frame_limit = int(total_frames)
+        framecnt = 1 # equals one b/c I read a frame ...
+        nprint("Total Frames to annotate= {}".format(int(frame_limit/sample_rate)))
+        result_json_hash = [None] * (int(frame_limit/sample_rate))
 
 
         # load num_threads images into queue with framecnt as index
         # Load Frames into Queue here.. then release the hounds
         # This is a serialized producer ....
+        nprint("Serially loading queue for multi-threaded api access.  Num frames = {}".format(frame_limit))
+        annotatecnt = 0
         while(framecnt < frame_limit):
             # Load
             for i in range(frame_limit) :
+                if(framecnt % 500 == 0 ):
+                    nprint("Loaded {} frames".format(framecnt))
                 ret, frame = cap.read()
-                q.put((framecnt,frame))
+
+                # Only load queue if matching the frame stride ...
+                if(framecnt%sample_rate == 0) :
+                    q.put((annotatecnt,framecnt,frame))
+                    annotatecnt+=1
                 framecnt += 1
 
     elif(media_mode == "image") :
@@ -300,6 +312,8 @@ def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", n
 
 
     # Setup Consumers.  They will fetch frame json info from api, and stick it in results list
+    nprint("Consuming all frames in queue.  Numthreads = {}".format(num_threads))
+
     threads = [None] * num_threads
     for i in range(len(threads)):
         threads[i] = Thread(target=consume_frames, args=(q, result_json_hash, i))
@@ -319,10 +333,148 @@ def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", n
     f.write(json.dumps(result_json_hash))
     f.close()
 
+############################################################################################################
+# PAIV API Funcs
+############################################################################################################
 
 
-def nprint(mystring) :
-    print("{} : {}".format(sys._getframe(1).f_code.co_name,mystring))
+def get_json_from_paiv(endpoint, img, temporary_fn ):
+    json_rv = None
+    if(endpoint != None ) :
+        headers = {
+            'authorization': "Basic ZXNlbnRpcmVcYdddddddddddddd",
+            'cache-control': "no-cache",
+        }
+        # Not very performant, but the API is forcing me to do this!
+        cv2.imwrite(temporary_fn, img)
+        files_like1 = open(temporary_fn,'rb')
+        files1={'files': files_like1}
+
+        #nprint("endpoint {}".format(endpoint))
+        #nprint("files1 {}".format(files1))
+
+        resp = requests.post(url=endpoint, verify=False, files=files1, headers=headers)  # files=files
+        json_rv = json.loads(resp.text)
+
+        #print(json.loads(resp.text))
+    else :
+        json_rv = {'empty_url' : ''}
+
+    # nprint("Returning data : {}".format(json_rv))
+
+    return json_rv
+
+
+############################################################################################################
+# Video Funcs
+############################################################################################################
+
+
+
+def edit_video(input_video, model_url,output_directory, output_fn, max_frames=50, force_refresh=True, sample_rate=1):
+    paiv_colors = generate_colors()
+
+    if(not(os.path.isfile(input_video))) :
+        nprint("Error : Input File {} does not exist.  Check path".format(input_video))
+        return 1;
+    print(input_video)
+
+
+    loopcnt = 1 # loopcnt set to one since we read the first frame
+
+    counter_dict = defaultdict(int)
+
+    metric_dict = defaultdict(int)
+    color_dict = defaultdict()
+
+    # Make
+    if(not(os.path.exists(output_directory))) :
+        #shutil.rmtree(output_directory)
+        os.mkdir(output_directory)
+
+
+    cache_file = output_directory + "/cache.json"
+    # Step1 : Determine if i need to fetch data or if cache file exists ...
+    # if it doesnt exist, build it ....
+
+    if(not os.path.isfile(cache_file) or force_refresh==True) :
+        nprint("Fetching scores from PAIV url = {}, output dir = {} ".format(model_url, output_directory))
+        fetch_scores(model_url, 'object', media_mode='video',num_threads=6,frame_limit=max_frames, sample_rate=sample_rate,image_dir="na", video_fn=input_video, paiv_results_file=cache_file)
+        #def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", num_threads=2, frame_limit=50, image_dir="na", video_fn="na", paiv_results_file="fetch_scores.json"):
+
+    box_cache_json =open(cache_file).read()
+    box_cache_list = json.loads(box_cache_json)
+
+    nprint("Read in {} json records".format(len(box_cache_list)))
+
+    # Second Pass over video
+    nprint("Annotating {} and saving in {}".format(input_video, output_directory))
+    cap  = cv2.VideoCapture(input_video)
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    fps = cap.get(cv2.CAP_PROP_FPS) # fps = video.get(cv2.CAP_PROP_FPS)
+    secs = total_frames / fps
+    nprint("Total number of frames  = {} (frames)".format(total_frames))
+    nprint("Frame rate              = {} (fps)".format(fps))
+    nprint("Total seconds for video = {} (s)".format(secs))
+
+    if(max_frames > total_frames) :
+        max_frames = total_frames
+        print("Processing number of frames  = {} (frames)".format(max_frames))
+    ret, frame = cap.read()
+
+    output  = cv2.VideoWriter(output_directory + "/" + output_fn, cv2.VideoWriter_fourcc(*"mp4v"), fps, (frame.shape[1],frame.shape[0]), True)
+
+    # Used to properly index into json list
+    sample_rate_idx = 0
+    while(loopcnt < max_frames ):
+        ret, frame = cap.read()
+
+
+        # Frame striding .....
+        if(loopcnt % sample_rate == 0) :
+            # plot_image( frame )
+
+            # If use_cache is true and I have my cache.json file, then just use previous labels !!
+            json_rv = box_cache_list[sample_rate_idx]
+            boxes = get_boxes_from_json(json_rv)
+            metric_dict = update_metrics(boxes, 1, metric_dict)
+
+            for box in boxes :
+                color_dict[box.label] = paiv_colors[int(hashlib.md5(box.label.encode('utf-8')).hexdigest(), 16 ) % 6]
+                color = paiv_colors[int(hashlib.md5(box.label.encode('utf-8')).hexdigest(), 16 ) % 6]
+                frame = draw_annotated_box(frame, box, color)
+                #framep = paiv.draw_annotated_box(framep, box, color)
+
+            frame = draw_counter_box(frame,'Running Counts', metric_dict, color_dict)
+            output.write(frame)
+            sample_rate_idx += 1
+
+        loopcnt += 1
+
+        if(loopcnt % sample_rate == 0 ) :
+            nprint("Complete {} frames".format(loopcnt))
+
+    cap.release()
+    output.release()
+    nprint("Program Complete : Wrote new movie : {}/{}".format(output_directory,output_fn))
+
+
+# Custom Logic for this soccer video
+# Keep track of raw box counts
+# Also track
+# - current opppent players (smoothed using ewma)
+# - current csa players (smoothed using ewma)
+# - ball touches with timer
+
+def update_metrics(boxes, frame_count, metric_dict):
+    #Embed some better logic here in the future
+
+    for box in boxes :
+        # Running counts
+        metric_dict[box.label]+=1
+
+    return metric_dict
+
 
 def generate_colors(class_names=['a','b','c','d','a1','b1','c1','d1','a2','b2','c2','d2']):
     hsv_tuples = [(x / len(class_names), 1., 1.) for x in range(len(class_names))]
@@ -334,36 +486,6 @@ def generate_colors(class_names=['a','b','c','d','a1','b1','c1','d1','a2','b2','
     return colors
 
 
-def get_json_from_paiv(endpoint, img, temporary_fn ):
-    json_rv = None
-    if(endpoint != None ) :
-        headers = {
-            'authorization': "Basic ZXNlbnRpcmVcYdddddddddddddd",
-            'cache-control': "no-cache",
-        }
-        # This code will stay here for reference.  Use this style if loading an image from disk
-
-        cv2.imwrite(temporary_fn, img)
-        files_like1 = open(temporary_fn,'rb')
-        files1={'files': files_like1}
-
-        # This code attempts to avoids writing the numpy array to disk, and just converts it to a byteIO stream...
-        # This code attempts to avoids writing the numpy array to disk, and just converts it to a byteIO stream...
-
-        # file_like = io.BufferedReader(io.BytesIO(img.tobytes()))
-        # file_like2 = io.BufferedReader(dvIO(img.tobytes()))
-        # files={'files': file_like2 }
-
-        resp = requests.post(url=endpoint, verify=False, files=files1, headers=headers)  # files=files
-        json_rv = json.loads(resp.text)
-
-        #print(json.loads(resp.text))
-    else :
-        json_rv = {'empty_url' : ''}
-
-    nprint("Returning data : {}".format(json_rv))
-
-    return json_rv
 
 def get_boxes_from_json(json_in) :
     '''
@@ -373,15 +495,18 @@ def get_boxes_from_json(json_in) :
     '''
     #print(json_in)
     rv_box_list = []
+    if(json_in != None) :
+        try :
+            box_list = json_in['classified']
+            for box in box_list :
+                tmpbox = Box(box['label'],box['xmin'],box['ymin'],box['xmax'],box['ymax'],box['confidence'])
+                rv_box_list.append(tmpbox)
 
-    try :
-        box_list = json_in['classified']
-        for box in box_list :
-            tmpbox = Box(box['label'],box['xmin'],box['ymin'],box['xmax'],box['ymax'],box['confidence'])
-            rv_box_list.append(tmpbox)
-
-    except KeyError :
+        except KeyError :
+            nprint("No Json available")
+    else :
         nprint("No Json available")
+
     return rv_box_list
 
 # This Function draws a nice looking bounding box ...
