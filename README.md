@@ -18,10 +18,10 @@ You will need a python 3.X environment (recommend Anaconda) for this program.  Y
 Program : **annotate_video.py**
 
 Parameters 
---input_video [Directory]
---model_url [PowerAI Vision Model deployment endpoint]
---output_directory [directory where you want the movie to be saved]
---sample_rate [integer : controls sample rate of video to downsample in cases of large videos]
+* --input_video [Directory]
+* --model_url [PowerAI Vision Model deployment endpoint]
+* --output_directory [directory where you want the movie to be saved]
+* --sample_rate [integer : controls sample rate of video to downsample in cases of large videos]
 
 
 Example incantation
