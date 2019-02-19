@@ -3,9 +3,16 @@
 ## Sample code and utilities library for working with powerai vision
 
 ---
+**Prerequisites**
+You will need a python 3.X environment (recommend Anaconda) for this program.  You will need to install the following libraries
+opencv
+requests
+urllib3
+numpy
+---
 
-Examples : Create a customized video with bounding box annotations
-Program : annotate_video.py
+**Example 1 : Create a customized video with bounding box annotations**
+Program : **annotate_video.py**
 
 Parameters 
 --input_video [Directory]
