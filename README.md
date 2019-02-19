@@ -6,10 +6,10 @@
 **Prerequisites**
 
 You will need a python 3.X environment (recommend Anaconda) for this program.  You will need to install the following libraries
-opencv
-requests
-urllib3
-numpy
+* opencv
+* requests
+* urllib3
+* numpy
 
 ---
 
