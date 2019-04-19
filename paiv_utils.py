@@ -235,13 +235,14 @@ def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", n
         while (q.qsize() > 0):
 
             (frame_key, frame_id, frame_np) = q.get()
-            if(q.qsize() % 10 == 0) :
+            if(q.qsize() % 1 == 0) :
                 print("Thr {} : Size of queue = {}".format(thread_id, q.qsize()))
                 #print("Thr {} : Hash key = {}".format(thread_id, frame_key))
                 #print("Thr {} : Frame id = {}".format(thread_id, frame_id))
 
-            json_rv = get_json_from_paiv(paiv_url, frame_np, fetch_fn )
+            json_rv = get_json_from_paiv(paiv_url, frame_np, fetch_fn, thread_id )
             result_dict[frame_key] = json_rv
+            print("Thr {} : Task complete".format(thread_id))
             q.task_done()
 
     q = Queue(maxsize=0)
@@ -316,6 +317,7 @@ def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", n
 
     threads = [None] * num_threads
     for i in range(len(threads)):
+        nprint("spawning thread {}".format(i))
         threads[i] = Thread(target=consume_frames, args=(q, result_json_hash, i))
         threads[i].start()
 
@@ -338,7 +340,7 @@ def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", n
 ############################################################################################################
 
 
-def get_json_from_paiv(endpoint, img, temporary_fn ):
+def get_json_from_paiv(endpoint, img, temporary_fn , thr_id=0):
     json_rv = None
     if(endpoint != None ) :
         headers = {
@@ -352,15 +354,16 @@ def get_json_from_paiv(endpoint, img, temporary_fn ):
 
         #nprint("endpoint {}".format(endpoint))
         #nprint("files1 {}".format(files1))
-
+        nprint("Thread Id = {} : sending post".format(thr_id))
         resp = requests.post(url=endpoint, verify=False, files=files1, headers=headers)  # files=files
+        nprint("Thread Id = {} : rcv post".format(thr_id))
         json_rv = json.loads(resp.text)
 
         #print(json.loads(resp.text))
     else :
         json_rv = {'empty_url' : ''}
 
-    # nprint("Returning data : {}".format(json_rv))
+    #nprint("Returning data : {}".format(json_rv))
 
     return json_rv
 
