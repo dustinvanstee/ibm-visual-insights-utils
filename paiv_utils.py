@@ -17,7 +17,7 @@ import os
 import hashlib
 import time
 from sklearn.metrics import confusion_matrix
-import sklearn_utils as su
+import paiv_utils.sklearn_utils as su
 from collections import defaultdict
 # functions that start with _ imply that these are private functions
 
@@ -577,8 +577,81 @@ def draw_counter_box(img, counter_title, counter_dict, color_dict ) :
     return img
 
 
+# This Function will parse a counter dictionary and draw a nice box in upper left hand corner
+def draw_text_box(img, box_title, box_text_list ) :
+    # This is the location on the screen where the ad times will go - if you want to move it to the right increase the AD_START_X
+    
+    # Start at (25,25) for ulc, and scale accordingly for counters ....
+    box_length = 400
+    # 25 pixels per text row ..
+    overlay_box = Box('none', 25,25,25+box_length, 100+len(box_text_list)*25,1.0)
 
+    AD_BOX_COLOR=(180,160,160)  # Make the ad timing box grey
+    COLOR_WHITE=(255,255,255)   # Make the text of the labels and the title white
 
+    # Make an overlay with the image shaded the way we want it...
+    overlay = img.copy()
+
+    # Shade Counter Box
+    cv2.rectangle(overlay, overlay_box.ulc(sf=1.0), overlay_box.lrc(sf=1.0), AD_BOX_COLOR, cv2.FILLED)
+    cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
+
+    ft = cv2.FONT_HERSHEY_SIMPLEX
+    sz = 0.6
+    # Draw Header ...
+    txt_y_off = 30
+    cv2.putText(img, box_title, overlay_box.ulc(sf=1.0,xoff=10,yoff=txt_y_off), ft, sz, COLOR_WHITE,2,cv2.LINE_AA)
+
+    #Draw Counters
+    i=1
+    sz = 0.6
+    
+    col = (255,255,255)
+    for i in range(len(box_text_list)) :
+        row = i + 1
+        box_text = box_text_list[i]
+        cv2.putText(img, box_text, overlay_box.ulc(sf=1.0,xoff=10,yoff=txt_y_off+25*row), ft, sz, col ,2,cv2.LINE_AA)
+        
+
+    return img
+
+# This Function will parse a counter dictionary and draw a nice box in upper left hand corner
+def add_image_thumbnail(img, img_thumbnail, overlay_dimensions_xy=(400,200), ) :
+    
+    COLOR_WHITE=(255,255,255)   # Make the text of the labels and the title white
+    COLOR_BLACK=(0,0,0)
+    
+    
+    #img_thumbnail = "dvlk//infer/unknown/vader_slice10-1-of-10.png"
+    # Make an overlay with the image shaded the way we want it...
+    overlay =cv2.imread(img_thumbnail) # cv2.IMREAD_UNCHANGED
+    (y,x,c) = img.shape
+    overlay1 = cv2.resize(overlay,overlay_dimensions_xy)
+    (yo,xo,co) =overlay1.shape
+    
+
+    # Use this Box for positioning logic ...    
+    #xmin = 25
+    #ymin = y - overlay_dimensions_xy[1]-25
+    #pos_box = Box('none', xmin,ymin,xmin+overlay_dimensions_xy[0], ymin+overlay_dimensions_xy[1],1.0)
+    xpad = 25
+    ypad = 25
+    #                                     top, bottom, left, right
+    overlay2= cv2.copyMakeBorder(overlay1,y-yo-ypad,ypad,xpad,x-xo-xpad,cv2.BORDER_CONSTANT,value=COLOR_BLACK)
+
+    # Make a mask the same size as the overlay box .. 100x100
+    nprint("o shape {},o1 shape {},o2 shape {}, img shape {}".format(overlay.shape,overlay1.shape,overlay2.shape,img.shape))
+
+    #mask = np.full(overlay_dimensions, 0, dtype=np.uint8)
+
+    # Shade Counter Box
+    #cv2.addWeighted(overlay2, 0.7, img, 0.3, 0, img)
+    # zero out part of image where png will reside ..
+    # ones_mask = np.full((img.shape[0], img.shape[1]), 1, dtype=np.uint8)
+    img[y-yo-ypad:y+ypad,xpad:xo+xpad,:] = 0 
+    img = cv2.bitwise_or(img, overlay2)
+
+    return img
 
 class Box():
     '''
