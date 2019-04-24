@@ -17,8 +17,9 @@ import os
 import hashlib
 import time
 from sklearn.metrics import confusion_matrix
-import paiv_utils.sklearn_utils as su
+import sklearn_utils as su
 from collections import defaultdict
+import pdb
 # functions that start with _ imply that these are private functions
 
 def nprint(mystring) :
@@ -342,6 +343,8 @@ def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", n
 
 def get_json_from_paiv(endpoint, img, temporary_fn , thr_id=0):
     json_rv = None
+
+    tstamp = "thr_id:{}-{}".format(thr_id,temporary_fn )
     if(endpoint != None ) :
         headers = {
             'authorization': "Basic ZXNlbnRpcmVcYdddddddddddddd",
@@ -354,10 +357,28 @@ def get_json_from_paiv(endpoint, img, temporary_fn , thr_id=0):
 
         #nprint("endpoint {}".format(endpoint))
         #nprint("files1 {}".format(files1))
-        nprint("Thread Id = {} : sending post".format(thr_id))
-        resp = requests.post(url=endpoint, verify=False, files=files1, headers=headers)  # files=files
-        nprint("Thread Id = {} : rcv post".format(thr_id))
-        json_rv = json.loads(resp.text)
+        nprint("{} : sending post".format(tstamp))
+
+        retry = True
+        retry_count = 0
+
+        while(retry == True and retry_count < 3) :
+            try :
+                resp = requests.post(url=endpoint, verify=False, files=files1, headers=headers, timeout=5)  # files=files
+                nprint("{} : rcv post".format(tstamp))
+                json_rv = json.loads(resp.text)
+                if(resp.status_code == 200) :
+                    retry = False
+                else :
+                    nprint("{} Bad Status code , retry ...".format(tstamp))
+                    retry_count +=1
+            except(requests.exceptions.Timeout):
+                retry_count +=1
+                nprint("{} Timeout, retry (inc count) {} ...".format(tstamp, retry_count))
+
+        if(json_rv == None) :
+            nprint("{} API failure : did not retrieve data".format(tstamp))
+            json_rv = {'empty_url' : 'fetch failed'}
 
         #print(json.loads(resp.text))
     else :
@@ -371,7 +392,37 @@ def get_json_from_paiv(endpoint, img, temporary_fn , thr_id=0):
 ############################################################################################################
 # Video Funcs
 ############################################################################################################
+def split_video(input_video, output_directory, max_frames=4, force_refresh=True, sample_rate=1) :
 
+    cap = cv2.VideoCapture(input_video)
+    total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    fps = cap.get(cv2.CAP_PROP_FPS) # fps = video.get(cv2.CAP_PROP_FPS)
+    secs = total_frames / fps
+    print("Total number of frames  = {} (frames)".format(total_frames))
+    print("Frame rate              = {} (fps)".format(fps))
+    print("Total seconds for video = {} (s)".format(secs))
+ 
+    loopcnt = 0
+    frames_written = 0
+    os.system("mkdir -p {}".format(output_directory))
+    while(loopcnt < total_frames):
+        ret, frame = cap.read()
+        # Frame skipping .....
+        if(loopcnt % sample_rate == 0 and frames_written < max_frames) :
+            output_fn = output_directory + '/' + input_video.split('/')[-1] 
+            output_fn = output_fn.replace(".mov", ".png")
+            output_fn = output_fn.replace(".mp4", ".png")
+            output_fn = output_fn.replace(".png", "_{}_.png".format(loopcnt))
+
+
+            nprint(output_fn)
+            # Hand labeled set
+            #pdb.set_trace()
+            cv2.imwrite( output_fn, frame )
+            frames_written +=1
+        loopcnt +=1
+
+    nprint("Complete.  Wrote {} frames to {}".format(frames_written,output_directory))
 
 
 def edit_video(input_video, model_url,output_directory, output_fn, max_frames=50, force_refresh=True, sample_rate=1):
@@ -542,7 +593,8 @@ def draw_annotated_box(img, box, color_bgr, mode="all") :
 
 
 # This Function will parse a counter dictionary and draw a nice box in upper left hand corner
-def draw_counter_box(img, counter_title, counter_dict, color_dict ) :
+# mode = ["counts" | "screen_time"]
+def draw_counter_box(img, counter_title, counter_dict, color_dict, mode="counts" ) :
     # This is the location on the screen where the ad times will go - if you want to move it to the right increase the AD_START_X
     num_counters = len(counter_dict)
     # Start at (25,25) for ulc, and scale accordingly for counters ....
