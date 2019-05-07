@@ -362,21 +362,22 @@ def get_json_from_paiv(endpoint, img, temporary_fn , thr_id=0):
         retry = True
         retry_count = 0
 
-        while(retry == True and retry_count < 3) :
+        while(retry == True and retry_count < 10) :
             try :
+                params = {"confthre":0.8}
                 resp = requests.post(url=endpoint, verify=False, files=files1, headers=headers, timeout=5)  # files=files
-                nprint("{} : rcv post".format(tstamp))
+                nprint("{} : rcv post after {} retries".format(tstamp, retry_count))
                 json_rv = json.loads(resp.text)
-                if(resp.status_code == 200) :
+                if(resp.status_code == 200 and json_rv['result'] == "success") :
                     retry = False
                 else :
-                    nprint("{} Bad Status code , retry ...".format(tstamp))
                     retry_count +=1
+                    nprint("{}  Status code {}, PAIV Result {}, retry {} ...".format(tstamp,resp.status_code, json_rv['result'], retry_count))
             except(requests.exceptions.Timeout):
                 retry_count +=1
-                nprint("{} Timeout, retry (inc count) {} ...".format(tstamp, retry_count))
+                nprint("{} Timeout, retry {} ...".format(tstamp, retry_count))
 
-        if(json_rv == None) :
+        if(json_rv == None or json_rv['result'] == "fail") :
             nprint("{} API failure : did not retrieve data".format(tstamp))
             json_rv = {'empty_url' : 'fetch failed'}
 
@@ -425,8 +426,11 @@ def split_video(input_video, output_directory, max_frames=4, force_refresh=True,
     nprint("Complete.  Wrote {} frames to {}".format(frames_written,output_directory))
 
 
-def edit_video(input_video, model_url,output_directory, output_fn, max_frames=50, force_refresh=True, sample_rate=1):
+# This is the workhorse function .....
+#
+def edit_video_objdet(input_video, model_url,output_directory, output_fn, max_frames=50, force_refresh=True, sample_rate=1, counter_mode="counts"):
     paiv_colors = generate_colors()
+    BOX_TITLE = "AD Logo Time"
 
     if(not(os.path.isfile(input_video))) :
         nprint("Error : Input File {} does not exist.  Check path".format(input_video))
@@ -455,7 +459,8 @@ def edit_video(input_video, model_url,output_directory, output_fn, max_frames=50
         nprint("Fetching scores from PAIV url = {}, output dir = {} ".format(model_url, output_directory))
         fetch_scores(model_url, 'object', media_mode='video',num_threads=6,frame_limit=max_frames, sample_rate=sample_rate,image_dir="na", video_fn=input_video, paiv_results_file=cache_file)
         #def fetch_scores(paiv_url, validate_mode="classification", media_mode="video", num_threads=2, frame_limit=50, image_dir="na", video_fn="na", paiv_results_file="fetch_scores.json"):
-
+    else :
+        nprint("Not hitting API : Using cache json file {}.  Use --force_refresh=True to hit the API".format(cache_file))
     box_cache_json =open(cache_file).read()
     box_cache_list = json.loads(box_cache_json)
 
@@ -485,27 +490,31 @@ def edit_video(input_video, model_url,output_directory, output_fn, max_frames=50
 
 
         # Frame striding .....
-        if(loopcnt % sample_rate == 0) :
+        if(loopcnt % sample_rate == 0 and frame is not None ) :
             # plot_image( frame )
 
             # If use_cache is true and I have my cache.json file, then just use previous labels !!
-            json_rv = box_cache_list[sample_rate_idx]
-            boxes = get_boxes_from_json(json_rv)
-            metric_dict = update_metrics(boxes, 1, metric_dict)
+            # dirty ole hack
+            if(loopcnt > 0) :
+                json_rv = box_cache_list[sample_rate_idx]
+                boxes = get_boxes_from_json(json_rv)
+                metric_dict = update_metrics(boxes, 1, metric_dict)
 
-            for box in boxes :
-                color_dict[box.label] = paiv_colors[int(hashlib.md5(box.label.encode('utf-8')).hexdigest(), 16 ) % 6]
-                color = paiv_colors[int(hashlib.md5(box.label.encode('utf-8')).hexdigest(), 16 ) % 6]
-                frame = draw_annotated_box(frame, box, color)
-                #framep = paiv.draw_annotated_box(framep, box, color)
+                for box in boxes :
+                    color_dict[box.label] = paiv_colors[int(hashlib.md5(box.label.encode('utf-8')).hexdigest(), 16 ) % 6]
+                    color = paiv_colors[int(hashlib.md5(box.label.encode('utf-8')).hexdigest(), 16 ) % 6]
+                    frame = draw_annotated_box(frame, box, color)
+                    #framep = paiv.draw_annotated_box(framep, box, color)
 
-            frame = draw_counter_box(frame,'Running Counts', metric_dict, color_dict)
+
+                frame = draw_counter_box(frame,BOX_TITLE, metric_dict, color_dict, counter_mode=counter_mode, fps=fps)
             output.write(frame)
             sample_rate_idx += 1
 
         loopcnt += 1
 
-        if(loopcnt % sample_rate == 0 ) :
+
+        if(loopcnt % 100 == 0 ) :
             nprint("Complete {} frames".format(loopcnt))
 
     cap.release()
@@ -593,38 +602,55 @@ def draw_annotated_box(img, box, color_bgr, mode="all") :
 
 
 # This Function will parse a counter dictionary and draw a nice box in upper left hand corner
-# mode = ["counts" | "screen_time"]
-def draw_counter_box(img, counter_title, counter_dict, color_dict, mode="counts" ) :
+# counter_mode = ["counts" | "screen_time"]
+def draw_counter_box(img, counter_title, counter_dict, color_dict, counter_mode="counts", fps=30 ) :
     # This is the location on the screen where the ad times will go - if you want to move it to the right increase the AD_START_X
     num_counters = len(counter_dict)
-    # Start at (25,25) for ulc, and scale accordingly for counters ....
-    box_length = 260
-    overlay_box = Box('none', 25,25,25+box_length, 100+num_counters*25,1.0)
+    sorted_counter_dict = sorted(counter_dict.items(), key=lambda kv: kv[1])
+    sorted_counter_dict.reverse()
 
-    AD_BOX_COLOR=(180,160,160)  # Make the ad timing box grey
-    COLOR_WHITE=(255,255,255)   # Make the text of the labels and the title white
+    if(len(sorted_counter_dict) > 0) :
+        # Start at (25,25) for ulc, and scale accordingly for counters ....
+        box_length = 300
+        y_offset = 90
+        x_offset = 25
+        overlay_box = Box('none', x_offset,y_offset,x_offset+box_length, y_offset+65+num_counters*25,1.0)
 
-    # Make an overlay with the image shaded the way we want it...
-    overlay = img.copy()
+        AD_BOX_COLOR=(180,160,160)  # Make the ad timing box grey
+        COLOR_WHITE=(255,255,255)   # Make the text of the labels and the title white
 
-    # Shade Counter Box
-    cv2.rectangle(overlay, overlay_box.ulc(sf=1.0), overlay_box.lrc(sf=1.0), AD_BOX_COLOR, cv2.FILLED)
-    cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
+        # Make an overlay with the image shaded the way we want it...
+        overlay = img.copy()
 
-    ft = cv2.FONT_HERSHEY_SIMPLEX
-    sz = 0.7
-    # Draw Header ...
-    txt_y_off = 30
-    cv2.putText(img, counter_title, overlay_box.ulc(sf=1.0,xoff=10,yoff=txt_y_off), ft, sz, COLOR_WHITE,2,cv2.LINE_AA)
+        # Shade Counter Box
+        cv2.rectangle(overlay, overlay_box.ulc(sf=1.0), overlay_box.lrc(sf=1.0), AD_BOX_COLOR, cv2.FILLED)
+        cv2.addWeighted(overlay, 0.6, img, 0.4, 0, img)
 
-    #Draw Counters
-    i=1
-    sz = 0.6
-    for (k,v ) in sorted(counter_dict.items()):
-        col = color_dict[k] if k in color_dict else (255,255,255)
-        txt = "{} : {}".format(k, counter_dict[k])
-        cv2.putText(img, txt, overlay_box.ulc(sf=1.0,xoff=10,yoff=txt_y_off+25*i), ft, sz, color_dict[k],2,cv2.LINE_AA)
-        i += 1
+        ft = cv2.FONT_HERSHEY_SIMPLEX
+        sz = 0.7
+        # Draw Header ...
+        txt_y_off = 30
+
+        #Draw Counters
+        i=1
+        sz = 0.6
+
+        cv2.putText(img, counter_title, overlay_box.ulc(sf=1.0,xoff=10,yoff=txt_y_off), ft, sz, COLOR_WHITE,2,cv2.LINE_AA)
+
+        for (k,v ) in sorted_counter_dict:
+            col = color_dict[k] if k in color_dict else (255,255,255)
+            if(counter_mode == "counts") :
+                txt = "{} : {}".format(k, counter_dict[k])
+            elif(counter_mode =="screen_time"):
+                stime = float(counter_dict[k]) / float(fps)
+                #txt = "{:<20s} : {:.2f} (s)".format(k, stime )
+                txt1 = "{:<20s} ".format(k )
+                txt2 = ": {:.2f} (s)".format(stime )
+            else :
+                nprint("Error, incorrect mode specified for counter box")
+            cv2.putText(img, txt1, overlay_box.ulc(sf=1.0,xoff=10,yoff=txt_y_off+25*i), ft, sz, color_dict[k],2,cv2.LINE_AA)
+            cv2.putText(img, txt2, overlay_box.ulc(sf=1.0,xoff=170,yoff=txt_y_off+25*i), ft, sz, color_dict[k],2,cv2.LINE_AA)
+            i += 1
 
     return img
 

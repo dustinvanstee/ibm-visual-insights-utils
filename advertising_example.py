@@ -41,10 +41,14 @@ def _parser():
         help='S|--data_directory=<location of exported PAIV dataset>')
 
     parser.add_argument(
-        '--force_refresh', action='store', nargs='?', required=False,
-        choices=[True,False], default=True,
-        help='S|--force_refresh=[True|False] '
-             'Default: %(default)s')
+        '--output_filename', type=str,
+        required=False, default="custom.mov",
+        help='S|--data_directory=<location of exported PAIV dataset>')
+
+    parser.add_argument('--force_refresh', dest='force_refresh', action='store_true',
+                        help='S|--force_refresh=[True|False] '
+                        'Default: %(default)s)')
+    parser.set_defaults(force_refresh=False)
 
     parser.add_argument(
         '--sample_rate', type=int, default=100, required=False,
@@ -66,9 +70,14 @@ def main():
     #print(args)
     #args.force_refresh = True
     for argk in vars(args) :
-        print(argk,vars(args)[argk])
-    paiv.edit_video(input_video=args.input_video, model_url=args.model_url, output_directory=args.output_directory\
-                    ,output_fn="custom.mov", force_refresh=args.force_refresh, max_frames=5000, sample_rate=args.sample_rate)
+        paiv.nprint("{} {}".format(argk,vars(args)[argk]))
+
+    paiv.edit_video_objdet(input_video=args.input_video, model_url=args.model_url, output_directory=args.output_directory\
+                           ,output_fn=args.output_filename, force_refresh=args.force_refresh, max_frames=5000, sample_rate=args.sample_rate, counter_mode="screen_time")
+
+    paiv.nprint("Program Finished")
+    for argk in vars(args) :
+        paiv.nprint("{} {}".format(argk,vars(args)[argk]))
 
 if __name__== "__main__":
   main()
