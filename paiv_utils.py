@@ -20,17 +20,52 @@ from sklearn.metrics import confusion_matrix
 import sklearn_utils as su
 from collections import defaultdict
 import pdb
+import pandas as pd
 # functions that start with _ imply that these are private functions
 
 def nprint(mystring) :
     print("{} : {}".format(sys._getframe(1).f_code.co_name,mystring))
 
 
-def _convert_xml(filein) :
-    e = xml.etree.ElementTree.parse(filein).getroot()
+def create_paiv_df(directory_in) :
+    '''
+    directory_in : location that contains exported paiv meta data for bboxes
+    returns : meta_df /<- pandas dataframe of metadata 
+                format : filename,class,x1,y1,x1,x2,center,prob
+    '''
+    # Read in prop.json
+    with open(directory_in + '/prop.json') as json_file:
+        data = json.load(json_file)
+        #print(data['usage']) 
+        #print(data) 
+        #print(data['file_prop_info'])
+        meta_df = pd.read_json(data['file_prop_info'], orient='records').set_index("_id")
+    display(meta_df)
+    # Now process all the xmls... create a row per bbox, and join to 
+    # prop.josn based on the _id field..
+
+    bbox_list = []
+    xmlfiles = glob.glob(directory_in+"/*.xml")
+    for xmlfile in xmlfiles :
+        bbox_list = bbox_list + _parse_paiv_xml(xmlfile)
+        #print(bbox_list)
+        #break
+    bbox_df = pd.DataFrame(bbox_list)
+    meta_df = meta_df[['original_file_name']].merge(bbox_df, left_index=True,right_on="_id")
+    
+    return meta_df
+
+def _parse_paiv_xml(filein) :
+    e = xml.etree.ElementTree .parse(filein).getroot()
     #class_list = []
     #box_list = []
+
+    # The associated id is teh file name sans the xml
+    file_id = filein.split('/')[-1]
+    file_id = file_id.replace('.xml','')
+
     rv_list = []
+    # Someday use the bbox class
     for obj in e.findall('object') :
         objclass = obj.find('name').text
         objclass = objclass.replace(' ','_')
@@ -39,19 +74,15 @@ def _convert_xml(filein) :
         xmax = int(obj.find('bndbox').find('xmax').text)
         ymax = int(obj.find('bndbox').find('ymax').text)
 
+        bbox = Box(objclass,xmin,ymin,xmax,ymax,1.0)
+
         if(xmin < 0.0 or ymin < 0.0 or xmax < 0 or ymax <0 ) :
             nprint("Error, file {} somehow has a negative pixel location recorded.  Omitting that box ....".format(filein))
         else :
-            box_dict = {"label" : objclass, "xmin" : xmin, "ymin" : ymin, "xmax" : xmax, "xmin" : xmin}
-            #class_list.append(objclass)
-            #box_list.append([xmin,ymin,xmax,ymax])
+            box_dict = {"_id": file_id, "label" : objclass, "xmin" : xmin, "ymin" : ymin, "xmax" : xmax, "ymax" : ymax, "xc" : bbox.center()[0], "yc" : bbox.center()[1]}
             rv_list.append(box_dict)
     # zip the class and box dimensions !
     #rv = list(zip(class_list,box_list))
-    #image_name =  get_image_from_xml(filein)
-    #pdb.set_trace()
-    #write_coco_labels(experiment_dir,image_name,0.0,box_list,class_list,cn_dict,labels_file)
-
     return rv_list
 
 def get_image_fn(paiv_file_name_base) :
@@ -86,7 +117,7 @@ def _load_paiv_dataset(data_dir, validate_mode) :
                 (xf_file_base,junk) = xf.split(".")
                 image_fn = get_image_fn(xf_file_base)
                 np_hash = get_np_hash(cv2.imread(image_fn))
-                paiv_dataset[np_hash] = {'id' : xf_file_base , 'boxes' : _convert_xml(xf)}
+                paiv_dataset[np_hash] = {'id' : xf_file_base , 'boxes' : _parse_paiv_xml(xf)}
         else : # classification
             # read in prop.json file and stuff into hash !
             json_str = open(data_dir + "/prop.json").read()
