@@ -21,14 +21,67 @@ import sklearn_utils as su
 from collections import defaultdict
 import pdb
 import pandas as pd
+import pathlib
+import shutil
 # functions that start with _ imply that these are private functions
 
 def nprint(mystring) :
     print("{} : {}".format(sys._getframe(1).f_code.co_name,mystring))
 
 
+def copy_file_to_subdir(row,**kwargs) : #directory_in,directory_out
+    # copy ofn/agm to new subdir ...
+    #print(row)
+    augm = str(row["augment_method"])
+    ofn= str(row["original_file_name"])
+    fid = row.name[-8:len(row.name)]
+    (ofn_root,ofn_extention) = row["original_file_name"].split('.')
+    print("ofn : {}".format(ofn))
+    print("ofn_root : {}".format(ofn_root))
+    print("ofn_extention {}".format(ofn_extention))
+    print("augm : {}".format(augm))
+          
+    newfile = "{}_{}_{}.{}".format(ofn_root,augm,fid,ofn_extention)
+    print("newfile : {}".format(newfile))
+    
+    fin = kwargs["directory_in"]  + "/" + row.name + ".jpg"
+    fout = kwargs["directory_out"] + "/" + row["category_name"] + "/"+ newfile
+    print("fin : {}".format(fin))
+    print("fout : {}".format(fout))
+    print("=============")
+    shutil.copy(fin,fout)
+
+def reformat_paiv_cls_export(directory_in:str, directory_out:str="/tmp/output") :
+    '''
+    Function that will take an exported PAIV project that has classificatins, and re-organize
+    the images into subdirectories
+    directory_in : directory path of an unzipped exported dataset
+    returns : 0 pass, 1 fail
+    side effect : new subdirectories get written under directory_out using class name from prop.json
+    '''
+     
+    with open(directory_in + '/prop.json') as json_file:
+        data = json.load(json_file)
+        df = pd.read_json(data['file_prop_info'], orient='records').set_index("_id")
+    
+    classes = list(df.category_name.unique())
+    nprint("classes : {}".format(classes))
+    # Make a directory in directory_out
+    for c in classes :
+        p = pathlib.Path(directory_out + "/" + c)
+        print(str(p))
+        if(not(p.exists())) :
+           nprint("Creating a new sub directory {}".format(str(p)))
+           p.mkdir(parents=True)
+
+    # Now iterate thruogh each row of dataframe and COPY image to sudirectory
+    df.apply(copy_file_to_subdir,directory_in=directory_in, directory_out=directory_out,axis=1)    
+
+
+           
 def create_paiv_df(directory_in) :
     '''
+    Function can be used to create a pandas dataframe of the metadata exported from PAIV
     directory_in : location that contains exported paiv meta data for bboxes
     returns : meta_df /<- pandas dataframe of metadata 
                 format : filename,class,x1,y1,x1,x2,center,prob
@@ -36,11 +89,7 @@ def create_paiv_df(directory_in) :
     # Read in prop.json
     with open(directory_in + '/prop.json') as json_file:
         data = json.load(json_file)
-        #print(data['usage']) 
-        #print(data) 
-        #print(data['file_prop_info'])
         meta_df = pd.read_json(data['file_prop_info'], orient='records').set_index("_id")
-    display(meta_df)
     # Now process all the xmls... create a row per bbox, and join to 
     # prop.josn based on the _id field..
 
@@ -51,8 +100,12 @@ def create_paiv_df(directory_in) :
         #print(bbox_list)
         #break
     bbox_df = pd.DataFrame(bbox_list)
-    meta_df = meta_df[['original_file_name']].merge(bbox_df, left_index=True,right_on="_id")
-    
+    print(len(bbox_df))
+    if(len(bbox_df) == 0) :
+        print("Warning : No bounding boxes found in prop.json.  Verify that this is an object detection data set")
+        print("Returning json dataframe without bounding boxes")
+    else :
+        meta_df = meta_df[['original_file_name']].merge(bbox_df, left_index=True,right_on="_id")
     return meta_df
 
 def _parse_paiv_xml(filein) :
