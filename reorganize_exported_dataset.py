@@ -19,11 +19,11 @@ class CustomFormatter(ap.RawDescriptionHelpFormatter, SmartFormatterMixin):
 
 
 def _parser():
-    parser = ap.ArgumentParser(description='Tool to annotate a video using PowerAI Vision '
-                                           'Requires :'
-                                           'Requires :'
-                                           'Requires :'
-                                           '  python score_exported_dataset.py --validate_mode=classification --model_url=https://129.40.2.225/powerai-vision/api/dlapis/8f80467f-470c-47f3-bf3c-ab7e0880a66b --data_directory=/data/work/osa/2018-10-PSEG/datasets_local/dv_97_classification_augmented_dataset-test',
+    parser = ap.ArgumentParser(description='Tool Reorganize an exported IBM Visual Insights Exported Directory'
+                                           'Supports Classification data only and reorganizes it into folders'
+                                           'with each subfolder being a label'
+                                           'Example :'
+                                           'python reorganize_exported_dataset.py --directory_in /tmp/exported_directory --directory_out /tmp/directory_out',
                                formatter_class=CustomFormatter)
 
     parser.add_argument(

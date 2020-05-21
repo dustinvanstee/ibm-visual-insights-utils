@@ -32,7 +32,9 @@ def nprint(mystring) :
 def copy_file_to_subdir(row,**kwargs) : #directory_in,directory_out
     # copy ofn/agm to new subdir ...
     #print(row)
-    augm = str(row["augment_method"])
+    augm="na"
+    if "augment_method" in row.keys() :
+        augm = str(row["augment_method"])
     ofn= str(row["original_file_name"])
     fid = row.name[-8:len(row.name)]
     (ofn_root,ofn_extention) = row["original_file_name"].split('.')
