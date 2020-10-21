@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # import paiv_utils as paiv
 import argparse as ap
-
+import json
+import pandas as pd
+import pathlib
 
 def reformat_paiv_cls_export(directory_in:str, directory_out:str="/tmp/output") :
     '''
@@ -17,13 +19,13 @@ def reformat_paiv_cls_export(directory_in:str, directory_out:str="/tmp/output") 
         df = pd.read_json(data['file_prop_info'], orient='records').set_index("_id")
     
     classes = list(df.category_name.unique())
-    nprint("classes : {}".format(classes))
+    print("classes : {}".format(classes))
     # Make a directory in directory_out
     for c in classes :
         p = pathlib.Path(directory_out + "/" + c)
         print(str(p))
         if(not(p.exists())) :
-           nprint("Creating a new sub directory {}".format(str(p)))
+           print("Creating a new sub directory {}".format(str(p)))
            p.mkdir(parents=True)
 
     # Now iterate thruogh each row of dataframe and COPY image to sudirectory
