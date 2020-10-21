@@ -1,6 +1,34 @@
 #!/usr/bin/env python
-import paiv_utils as paiv
+# import paiv_utils as paiv
 import argparse as ap
+
+
+def reformat_paiv_cls_export(directory_in:str, directory_out:str="/tmp/output") :
+    '''
+    Function that will take an exported PAIV project that has classificatins, and re-organize
+    the images into subdirectories
+    directory_in : directory path of an unzipped exported dataset
+    returns : 0 pass, 1 fail
+    side effect : new subdirectories get written under directory_out using class name from prop.json
+    '''
+     
+    with open(directory_in + '/prop.json') as json_file:
+        data = json.load(json_file)
+        df = pd.read_json(data['file_prop_info'], orient='records').set_index("_id")
+    
+    classes = list(df.category_name.unique())
+    nprint("classes : {}".format(classes))
+    # Make a directory in directory_out
+    for c in classes :
+        p = pathlib.Path(directory_out + "/" + c)
+        print(str(p))
+        if(not(p.exists())) :
+           nprint("Creating a new sub directory {}".format(str(p)))
+           p.mkdir(parents=True)
+
+    # Now iterate thruogh each row of dataframe and COPY image to sudirectory
+    df.apply(copy_file_to_subdir,directory_in=directory_in, directory_out=directory_out,axis=1)    
+
 
 class SmartFormatterMixin(ap.HelpFormatter):
     # ref:
@@ -47,7 +75,7 @@ def main():
     #args.force_refresh = True
     for argk in vars(args) :
         print(argk,vars(args)[argk])
-    paiv.reformat_paiv_cls_export(args.directory_in, args.directory_out)
+    reformat_paiv_cls_export(args.directory_in, args.directory_out)
 
 if __name__== "__main__":
   main()
