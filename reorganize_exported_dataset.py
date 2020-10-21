@@ -4,6 +4,32 @@ import argparse as ap
 import json
 import pandas as pd
 import pathlib
+import shutil
+
+def copy_file_to_subdir(row,**kwargs) : #directory_in,directory_out
+    # copy ofn/agm to new subdir ...
+    #print(row)
+    augm="na"
+    if "augment_method" in row.keys() :
+        augm = str(row["augment_method"])
+    ofn= str(row["original_file_name"])
+    fid = row.name[-8:len(row.name)]
+    (ofn_root,ofn_extention) = row["original_file_name"].split('.')
+    print("ofn : {}".format(ofn))
+    print("ofn_root : {}".format(ofn_root))
+    print("ofn_extention {}".format(ofn_extention))
+    print("augm : {}".format(augm))
+          
+    newfile = "{}_{}_{}.{}".format(ofn_root,augm,fid,ofn_extention)
+    print("newfile : {}".format(newfile))
+    
+    fin = kwargs["directory_in"]  + "/" + row.name + ".jpg"
+    fout = kwargs["directory_out"] + "/" + row["category_name"] + "/"+ newfile
+    print("fin : {}".format(fin))
+    print("fout : {}".format(fout))
+    print("=============")
+    shutil.copy(fin,fout)
+
 
 def reformat_paiv_cls_export(directory_in:str, directory_out:str="/tmp/output") :
     '''
