@@ -27,8 +27,81 @@ import shutil
 
 def nprint(mystring) :
     print("{} : {}".format(sys._getframe(1).f_code.co_name,mystring))
+################################
+# Object Detection Conversion Functions
+##################################
+def copy_file_to_objdir(row, **kwargs) : #directory_in,directory_out
+    # copy ofn/agm to new subdir ...
+    #print(row)         
+    fin = kwargs["directory_in"]  + "/" + row.name + "."+ row.suffix
+    fout = kwargs["directory_out"] + "/" + row.new_file_name
 
+    print("fin : {}".format(fin))
+    print("fout : {}".format(fout))
+    print("=============")
+    shutil.copy(fin,fout)
 
+# Add a column for a new transposed file name ..
+# nfn means new file name.. basically composing a file of original name + transform + file id for traceablitly
+def new_file_name(df):
+    df["nfn"] = df["original_file_name"].str.split(".", n = 1, expand = True)[0]
+    df["suffix"] = df["original_file_name"].str.split(".", n = 1, expand = True)[1]
+    if "augment_method" in df.columns :
+        df["nfn"] = df["nfn"] + "_" + df["augment_method"]
+    else :
+        df["nfn"] = df["nfn"] + "_na"
+    
+    df["nfn"] = df["nfn"] + "_" + df.index.str[-8:]
+    df["nfn"] = df["nfn"] + "." + df["suffix"]
+    return df["nfn"]
+    
+def reformat_ivi_objdet_export(directory_in:str, directory_out:str="/tmp/output") :
+    '''
+    Function that will take an exported PAIV project that has classificatins, and re-organize
+    the images into subdirectories
+    directory_in : directory path of an unzipped exported dataset
+    returns : 0 pass, 1 fail
+    side effect : new subdirectories get written under directory_out using class name from prop.json
+    '''
+     
+    with open(directory_in + '/prop.json') as json_file:
+        data = json.load(json_file)
+        prop_df = pd.read_json(data['file_prop_info'], orient='records').set_index("_id")
+    
+    prop_df["new_file_name"] = new_file_name(prop_df)
+    
+        
+    obj_df = create_paiv_df(directory_in)
+    # df[["original_file_name","xmin","ymin","xmax","ymax","label"]]
+    # join obj table with meta data table to get the new file name based on augmentation
+    #display(prop_df.head())
+    obj_df = obj_df.merge(prop_df, left_on="_id", right_on="_id", how="left")
+    #display(obj_df.head())
+    
+    # Create new path to write out files
+    obj_df["path"] = directory_out + "/objdet/" + obj_df["new_file_name"]
+    obj_df = obj_df[["path","xmin","ymin","xmax","ymax","label"]]
+    
+    # Make a directory objdet in directory_out
+    p = pathlib.Path(directory_out + "/objdet")
+    #nprint(str(p))
+    if(not(p.exists())) :
+        nprint("Creating a new sub directory {}".format(str(p)))
+        p.mkdir(parents=True)
+    
+    ## Now iterate thruogh each row of dataframe and COPY image to sudirectory
+    prop_df.apply(copy_file_to_objdir,directory_in=directory_in, directory_out=str(p) ,axis=1)  
+
+    csv_fileout = str(p.absolute()) + "/labels.csv"
+    nprint("Writing CSV data out to {}".format(csv_fileout))
+    obj_df.to_csv(csv_fileout,index=False)
+
+    return prop_df,obj_df
+    
+
+################################
+# Classification Conversion Functions
+##################################
 def copy_file_to_subdir(row,**kwargs) : #directory_in,directory_out
     # copy ofn/agm to new subdir ...
     #print(row)
